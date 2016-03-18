@@ -1,54 +1,48 @@
-from flask import Flask, jsonify
 import boto3
-import botocore
-import os
+from flask import Flask, jsonify
+from botocore import exceptions
 
-app = Flask(__name__)
-s3 = boto3.resource('s3')
+app = Flask(__name__, instance_relative_config=True)
+app.config.from_pyfile('aws_config.py')
 
-LOCAL_PATH = '~/s3/'
+# app.config['SECRET_KEY']
 
+s3 = boto3.client('s3',
+                  aws_access_key_id=app.config['ACCESS_KEY'],
+                  aws_secret_access_key=app.config['SECRET_KEY'])
 
 @app.route('/')
 def hello_world():
     return 'Hello World!'
 
 
-@app.route('/s3service/get/<string:bucket_name>/<string:key>', methods=['GET'])
-def get(bucket_name, key):
+@app.route('/s3service/get-base64-string/<string:bucket_name>/<string:key>', methods=['GET'])
+def get_base64_string(bucket_name, key):
+    print "get-base64-string"
     bucket = get_bucket(bucket_name)
 
     # if the bucket doesn't exist, return a 404 error
     if not bucket:
         return jsonify({'error': 404})
 
-    # search the bucket for the desired file
-    for k in bucket.objects.all():
-        file_name = str(k.key)
-        # if we found the key and it isn't already saved locally, download it
-        if file_name == key and not os.path.exists(LOCAL_PATH + file_name):
-            k.get_contents_to_filename(LOCAL_PATH + file_name)
-            return jsonify({'path': LOCAL_PATH + file_name})
-
-    return jsonify({'already_exists': LOCAL_PATH + file_name})
+    value = s3.Object(bucket_name, key).get().read().decode("Base64")
+    return jsonify({'bucket': bucket_name, 'key': key, 'value': value})
 
 
-@app.route('/s3service/put/<string:bucket_name>/<string:file_path>', methods=['PUT'])
-def put(bucket_name, file_path):
-    bucket = get_bucket(bucket_name)
+@app.route('/s3service/put-base64-string/<string:bucket_name>/<string:key>/<string:value>', methods=['GET'])
+def put_base_64_string(bucket_name, key, value):
+    print "put-base64-string"
+    try:
+        bucket = get_bucket(bucket_name)
+    except Exception as e:
+        print e
 
     # if the bucket doesn't exist, make one
     if not bucket:
         s3.create_bucket(Bucket=bucket_name)
 
-    # make sure the file exists
-    if not os.path.exists(file_path):
-        return jsonify({'error': 'File does not exist'})
-
-    # put the file in the bucket
-    file_name = os.path.basename(file_path)
-    s3.Object(bucket_name, file_name).put(Body=open(file_path, 'rb'))
-    return jsonify({'bucket': bucket_name, 'key': file_name})
+    s3.Object(bucket_name, key).put(Body=value)
+    return jsonify({'bucket': bucket_name, 'key': key, 'value': value})
 
 
 @app.route('/s3service/delete')
@@ -61,10 +55,10 @@ def get_bucket(bucket_name):
 
     try:
         s3.meta.client.head_bucket(Bucket=bucket_name)
-    except botocore.exceptions.ClientError as e:
+    except exceptions.ClientError as e:
         # if it was a 404 error, the bucket doesn't exist
         error_code = int(e.response['Error']['Code'])
-        if error_code == 404
+        if error_code == 404:
             bucket = False
 
     return bucket
